@@ -1,0 +1,272 @@
+# Replit-ready 전공서적 대여 플랫폼 (MVP)
+
+이번 템플릿은 Replit(Node.js)에서 바로 실행 가능한 최소 기능의 전공서적 대여 서비스입니다.
+아래 파일들을 Replit 프로젝트에 그대로 추가하거나, Replit에서 새 Node.js 템플릿을 만든 뒤 파일 내용을 붙여넣어 사용하세요.
+
+--- 파일 목록 및 내용 (각 파일을 프로젝트에 생성하세요) ---
+
+=== package.json ===
+{
+  "name": "book-rental-mvp",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "lowdb": "^6.0.1",
+    "nanoid": "^4.0.0",
+    "body-parser": "^1.20.2"
+  }
+}
+
+=== index.js ===
+// 간단한 Express 서버 + lowdb(JSON DB) 기반 MVP
+const express = require('express');
+const { Low, JSONFile } = require('lowdb');
+const { nanoid } = require('nanoid');
+const path = require('path');
+const bodyParser = require('body-parser');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// DB 설정 (./db.json)
+const file = path.join(__dirname, 'db.json');
+const adapter = new JSONFile(file);
+const db = new Low(adapter);
+
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// DB 초기화
+async function initDB() {
+  await db.read();
+  db.data = db.data || { books: [], rentals: [] };
+  await db.write();
+}
+
+// API: 책 목록 조회
+app.get('/api/books', async (req, res) => {
+  await db.read();
+  res.json(db.data.books);
+});
+
+// API: 책 추가 (관리자나 초기 테스트용)
+app.post('/api/books', async (req, res) => {
+  const { title, author, price, coverUrl } = req.body;
+  if (!title) return res.status(400).json({ error: 'title required' });
+  const book = { id: nanoid(), title, author: author||'', price: price||0, coverUrl: coverUrl||'', available: true };
+  await db.read();
+  db.data.books.push(book);
+  await db.write();
+  res.json(book);
+});
+
+// API: 책 대여
+app.post('/api/rent', async (req, res) => {
+  const { bookId, userName, periodDays } = req.body;
+  if (!bookId || !userName) return res.status(400).json({ error: 'bookId and userName required' });
+  await db.read();
+  const book = db.data.books.find(b => b.id === bookId);
+  if (!book) return res.status(404).json({ error: 'book not found' });
+  if (!book.available) return res.status(400).json({ error: 'book not available' });
+
+  const now = Date.now();
+  const due = now + (Number(periodDays || 14) * 24 * 60 * 60 * 1000);
+  const rental = { id: nanoid(), bookId, userName, start: now, due, returned: false };
+  book.available = false;
+  db.data.rentals.push(rental);
+  await db.write();
+  res.json({ rental, book });
+});
+
+// API: 반납
+app.post('/api/return', async (req, res) => {
+  const { rentalId } = req.body;
+  if (!rentalId) return res.status(400).json({ error: 'rentalId required' });
+  await db.read();
+  const rental = db.data.rentals.find(r => r.id === rentalId);
+  if (!rental) return res.status(404).json({ error: 'rental not found' });
+  if (rental.returned) return res.status(400).json({ error: 'already returned' });
+  rental.returned = true;
+  rental.returnedAt = Date.now();
+  const book = db.data.books.find(b => b.id === rental.bookId);
+  if (book) book.available = true;
+  await db.write();
+  res.json({ rental, book });
+});
+
+// API: 내 대여내역
+app.get('/api/my-rentals', async (req, res) => {
+  const userName = req.query.userName;
+  if (!userName) return res.status(400).json({ error: 'userName required' });
+  await db.read();
+  const rentals = db.data.rentals.filter(r => r.userName === userName);
+  res.json(rentals);
+});
+
+// 서버 시작
+initDB().then(() => {
+  // 기본 샘플 데이터가 없으면 몇 권 추가
+  (async () => {
+    await db.read();
+    if (db.data.books.length === 0) {
+      db.data.books.push(
+        { id: nanoid(), title: '회계원리', author: '홍길동', price: 50000, coverUrl: '', available: true },
+        { id: nanoid(), title: '미적분학', author: '김미', price: 45000, coverUrl: '', available: true },
+        { id: nanoid(), title: '유기화학', author: '이과생', price: 60000, coverUrl: '', available: true }
+      );
+      await db.write();
+    }
+  })();
+
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+});
+
+=== db.json ===
+{
+  "books": [],
+  "rentals": []
+}
+
+=== public/index.html ===
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>전공서적 대여 플랫폼 (MVP)</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>전공서적 대여 플랫폼 — MVP</h1>
+
+    <section id="books-section">
+      <h2>책 목록</h2>
+      <div id="books"></div>
+    </section>
+
+    <section id="rent-section">
+      <h2>대여하기</h2>
+      <label>당신의 이름: <input id="userName" placeholder="예: 김철수"></label>
+      <div id="selectedBook"></div>
+      <label>대여 기간(일): <input id="periodDays" type="number" value="14"></label>
+      <button id="rentBtn" disabled>대여하기</button>
+    </section>
+
+    <section id="my-section">
+      <h2>내 대여내역</h2>
+      <button id="refreshMy">내 대여 내역 불러오기</button>
+      <div id="myRentals"></div>
+    </section>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
+
+=== public/styles.css ===
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:20px;background:#f7f7f7}
+.container{max-width:900px;margin:0 auto;background:white;padding:20px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08)}
+h1{margin-top:0}
+.book{border:1px solid #eee;padding:10px;margin:8px 0;border-radius:6px;display:flex;justify-content:space-between;align-items:center}
+.book .meta{flex:1}
+.book button{margin-left:12px}
+section{margin-top:16px}
+
+=== public/app.js ===
+async function api(path, opts){
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error((await res.json()).error || 'API error');
+  return res.json();
+}
+
+let selectedBookId = null;
+
+async function loadBooks(){
+  const books = await api('/api/books');
+  const container = document.getElementById('books');
+  container.innerHTML = '';
+  books.forEach(b => {
+    const div = document.createElement('div');
+    div.className = 'book';
+    div.innerHTML = `<div class="meta"><strong>${b.title}</strong> — ${b.author} <div>정가: ${b.price}원</div></div>`;
+    const action = document.createElement('div');
+    if (b.available){
+      const btn = document.createElement('button');
+      btn.textContent = '선택';
+      btn.onclick = () => { selectedBookId = b.id; document.getElementById('selectedBook').textContent = '선택된 책: ' + b.title; document.getElementById('rentBtn').disabled = false; };
+      action.appendChild(btn);
+    } else {
+      action.textContent = '대여중';
+    }
+    div.appendChild(action);
+    container.appendChild(div);
+  });
+}
+
+async function rent(){
+  const userName = document.getElementById('userName').value.trim();
+  const periodDays = Number(document.getElementById('periodDays').value || 14);
+  if (!userName) return alert('이름을 입력하세요');
+  if (!selectedBookId) return alert('책을 선택하세요');
+  try{
+    const res = await api('/api/rent', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bookId: selectedBookId, userName, periodDays }) });
+    alert('대여 성공!');
+    selectedBookId = null;
+    document.getElementById('selectedBook').textContent = '';
+    document.getElementById('rentBtn').disabled = true;
+    loadBooks();
+  }catch(e){ alert(e.message); }
+}
+
+async function loadMy(){
+  const userName = document.getElementById('userName').value.trim();
+  if (!userName) return alert('이름을 입력하세요');
+  try{
+    const rentals = await api('/api/my-rentals?userName=' + encodeURIComponent(userName));
+    const container = document.getElementById('myRentals');
+    container.innerHTML = '';
+    if (rentals.length === 0) container.textContent = '대여 내역이 없습니다.';
+    rentals.forEach(r => {
+      const div = document.createElement('div');
+      div.className = 'book';
+      const due = new Date(r.due);
+      div.innerHTML = `<div class="meta">대여ID: ${r.id}<div>책ID: ${r.bookId}</div><div>반납여부: ${r.returned ? '반납됨' : '대여중'}</div><div>기한: ${due.toLocaleString()}</div></div>`;
+      if (!r.returned){
+        const btn = document.createElement('button');
+        btn.textContent = '반납하기';
+        btn.onclick = async () => { await api('/api/return', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ rentalId: r.id }) }); alert('반납 처리됨'); loadBooks(); loadMy(); };
+        div.appendChild(btn);
+      }
+      container.appendChild(div);
+    });
+  }catch(e){ alert(e.message); }
+}
+
+document.getElementById('rentBtn').addEventListener('click', rent);
+document.getElementById('refreshMy').addEventListener('click', loadMy);
+
+loadBooks();
+
+=== 사용법 ===
+1) Replit에서 새 Node.js 프로젝트 생성
+2) 위 파일들을 각각 생성해서 붙여넣기
+3) 패키지 설치: Replit은 자동으로 package.json을 읽어 설치해주지만, 로컬에서 실행 시 `npm install` 실행
+4) 시작: `npm start` 또는 Replit에서 Run 클릭
+5) 앱 접속: Replit이 제공하는 포트/URL로 접속하거나 로컬에서는 http://localhost:3000
+
+=== 확장 아이디어 ===
+- 사용자 계정(로그인) 기능 추가 (JWT) 및 결제 연동
+- 학교/학과별 픽업 스팟 모델 추가
+- 관리자 대시보드 (책 검수, 손상관리)
+- 검색/추천 엔진 및 바코드 스캔으로 등록
+
+
+---
+
+프로젝트 파일을 생성해뒀습니다. 코드를 확인해보고 수정 원하시는 부분(예: React 프론트로 바꾸기, DB를 PostgreSQL로 바꾸기, 결제 연동 추가 등)이 있으면 바로 반영해드릴게요.
